@@ -1,6 +1,6 @@
 {
   "name": "arkterm",
-  "version": "0.5.13",
+  "version": "0.5.14",
   "description": "🚀 Multi-Model Terminal AI Agent — Doubao · DeepSeek · Claude",
   "main": "src/main.js",
   "bin": {
