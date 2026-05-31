@@ -28,6 +28,7 @@
   "files": [
     "bin/",
     "src/",
+    "wechat_radar.ps1",
     "README.md",
     "README.zh-CN.md"
   ],
