@@ -61,6 +61,27 @@ let autoApprove = false;
 function setAutoApprove(val) { autoApprove = val; }
 function getAutoApprove() { return autoApprove; }
 
+// ── WeChat bridge (set by main.js after monitor init) ──────────────────────
+
+let _wechatMonitor = null;
+let _sendWechatMessageFn = null;
+
+/**
+ * Inject the WeChatMonitor instance so tools can call switchAndReceive.
+ * Called once by main.js after WeChatMonitor is created.
+ */
+function setWeChatMonitor(monitor) {
+  _wechatMonitor = monitor;
+}
+
+/**
+ * Inject the sendWechatMessage function (from wechat.js).
+ * Called once by main.js so send_wechat_message tool can send messages.
+ */
+function setSendWechatMessage(fn) {
+  _sendWechatMessageFn = fn;
+}
+
 // ── Tool implementations ──────────────────────────────────────────────────
 
 /**
@@ -646,6 +667,93 @@ async function gitAssistant(action) {
   return `[Error] 未知 git action: ${action}。支持: status, diff, commit_all`;
 }
 
+// ── WeChat Switch & Receive ─────────────────────────────────────────────────
+
+/**
+ * Switch WeChat to a target contact and return their latest messages.
+ * Used by the AI agent when the user says "查看郭振杰的消息" etc.
+ */
+async function switchAndReceiveWechat(args) {
+  if (!_wechatMonitor) {
+    return '[WeChat] 微信监控模块未初始化。请确保 WeChat Monitor 已启动。';
+  }
+
+  const contact = args.contact || '';
+  if (!contact) {
+    return '[WeChat] 请指定联系人名称。用法: switch_and_receive_wechat { contact: "郭振杰" }';
+  }
+
+  const result = await _wechatMonitor.switchAndReceive(contact);
+
+  if (result.status === 'scan_failed') {
+    return `[WeChat] 扫描失败 — 无法读取微信 UIA 树。请确认微信已打开且聊天窗口可见。`;
+  }
+
+  if (result.status === 'not_running') {
+    return '[WeChat] 微信未运行。请先启动微信并打开聊天窗口。';
+  }
+
+  if (result.status === 'window_not_found') {
+    return '[WeChat] 检测到微信进程，但无法定位主窗口。请确保微信窗口未最小化到托盘。';
+  }
+
+  if (result.status === 'no_messages') {
+    const availList = (result.availableContacts || []).slice(0, 15).join('、');
+    return (
+      `[WeChat] 已切换到联系人 "${contact}"，但当前窗口暂无消息。\n` +
+      `  当前活跃联系人: ${result.activeContact || '未检测到'}\n` +
+      `  匹配状态: ${result.contactMatched ? '✓ 已匹配' : '✗ 未精确匹配 — 请手动点击该联系人'}\n` +
+      (availList ? `  可用联系人 (前15): ${availList}` : '')
+    );
+  }
+
+  // Success — format messages
+  const convo = result.conversation || [];
+  const formatted = convo.slice(-20).map((m) => {
+    const prefix = m.role === 'me' ? '🧑 [用户]' : '💬 [对方]';
+    return `${prefix}: ${m.text}`;
+  }).join('\n');
+
+  return (
+    `📱 微信 — ${result.activeContact || contact}\n` +
+    `  消息数: ${result.messageCount}  聊天状态: ${result.chatOpen ? '开启' : '未知'}\n` +
+    `  匹配: ${result.contactMatched ? '✓' : '⚠ 未精确匹配'}\n` +
+    `─── 最近对话 ───\n${formatted || '(空)'}\n` +
+    `─── 微信监控已进入快速轮询模式 (2.5s 间隔, 持续 2 分钟) ───`
+  );
+}
+
+// ── WeChat Send Message ────────────────────────────────────────────────────
+
+/**
+ * Send a message to a WeChat contact by injecting text into the input box.
+ * Uses UIA to locate the Edit control and SendKeys to type + Enter.
+ */
+async function sendWechatMessageTool(args) {
+  if (!_sendWechatMessageFn) {
+    return '[WeChat] 微信发送模块未初始化。请确保 WeChat Monitor 已启动。';
+  }
+
+  const contact = args.contact || '';
+  const text = args.text || '';
+
+  if (!contact) {
+    return '[WeChat] 请指定联系人名称。用法: send_wechat_message { contact: "郭振杰", text: "好的" }';
+  }
+
+  if (!text || text.trim().length === 0) {
+    return '[WeChat] 消息内容不能为空。';
+  }
+
+  const result = await _sendWechatMessageFn(contact, text);
+
+  if (result.status === 'ok') {
+    return `✅ 微信消息已发送给 "${contact}": "${text}"`;
+  }
+
+  return `[WeChat] 发送失败: ${result.error || '未知错误'}`;
+}
+
 // ── OpenAI Function‑Calling Schemas ───────────────────────────────────────
 
 const TOOL_SCHEMAS = [
@@ -767,6 +875,46 @@ const TOOL_SCHEMAS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'switch_and_receive_wechat',
+      description:
+        '微信消息工具。切换到指定联系人并实时接收其最新消息。当用户提到"查看XX的消息"、"接收微信"、"看下谁发了什么"时使用此工具。支持联系人名称模糊匹配。',
+      parameters: {
+        type: 'object',
+        properties: {
+          contact: {
+            type: 'string',
+            description: '要查看的联系人名称（支持模糊匹配），例如："郭振杰"、"张三"、"妈妈"',
+          },
+        },
+        required: ['contact'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'send_wechat_message',
+      description:
+        '微信消息发送工具。直接向指定微信联系人发送一条文字消息。当用户说"帮我回复XX"、"给XX发一条消息说..."、"替我回XX一句..."时使用此工具。消息会自动注入微信输入框并发送。',
+      parameters: {
+        type: 'object',
+        properties: {
+          contact: {
+            type: 'string',
+            description: '接收消息的联系人名称，例如："郭振杰"、"张三"',
+          },
+          text: {
+            type: 'string',
+            description: '要发送的消息文本内容（简洁自然，15字以内为佳）',
+          },
+        },
+        required: ['contact', 'text'],
+      },
+    },
+  },
 ];
 
 // ── Dispatch table ────────────────────────────────────────────────────────
@@ -778,6 +926,8 @@ const TOOL_DISPATCH = {
   patch_file: async (args) => patchFile(args.path, args.search, args.replace),
   execute_command: async (args) => executeCommand(args.command),
   git_assistant: async (args) => gitAssistant(args.action),
+  switch_and_receive_wechat: async (args) => switchAndReceiveWechat(args),
+  send_wechat_message: async (args) => sendWechatMessageTool(args),
 };
 
 module.exports = {
@@ -785,4 +935,6 @@ module.exports = {
   TOOL_DISPATCH,
   setAutoApprove,
   getAutoApprove,
+  setWeChatMonitor,
+  setSendWechatMessage,
 };

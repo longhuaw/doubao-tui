@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node bin/index.js",
-    "test": "node -c src/config.js src/session.js src/security.js src/tools.js src/ui.js src/main.js bin/index.js"
+    "test": "node -c src/config.js src/session.js src/security.js src/tools.js src/ui.js src/wechat.js src/main.js bin/index.js"
   },
   "keywords": [
     "arkterm",

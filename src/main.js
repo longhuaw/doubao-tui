@@ -12,9 +12,10 @@ const boxen = require('boxen');
 const readline = require('readline');
 const { OpenAI } = require('openai');
 const { ChatSession } = require('./session');
-const { TOOL_SCHEMAS, TOOL_DISPATCH, setAutoApprove } = require('./tools');
+const { TOOL_SCHEMAS, TOOL_DISPATCH, setAutoApprove, setWeChatMonitor, setSendWechatMessage } = require('./tools');
 const config = require('./config');
 const { renderMarkdown, renderDiff, createSpinner } = require('./ui');
+const { WeChatMonitor, sendWechatMessage } = require('./wechat');
 const { MODEL_REGISTRY, state, ALIASES, switchModel, getCurrentDisplayName } = config;
 
 // ── Constants ─────────────────────────────────────────────────────────────
@@ -69,6 +70,8 @@ Tools available:
 4. **patch_file** — search-and-replace edit
 5. **execute_command** — run a shell command (high-risk commands auto-blocked)
 6. **git_assistant** — git status/diff/commit with auto-generated AngularJS commit messages
+7. **switch_and_receive_wechat** — 切换到指定微信联系人并接收实时消息（当用户提到"查看XX的消息"时使用）
+8. **send_wechat_message** — 直接向指定微信联系人发送一条文字消息（当用户说"帮我回复XX"、"给XX发消息"时使用）
 
 Rules:
 - Respond in the SAME LANGUAGE as the user's message.
@@ -112,6 +115,29 @@ function createClient() {
   });
   _cachedConfigKey = configKey;
   return _cachedClient;
+}
+
+// ── Shared input state (exposed for WeChat real‑time notification) ─────
+
+/** Holds the live readLine state so WeChat callbacks can restore the prompt. */
+const _inputState = { buf: '', pos: 0, display: null, promptStr: '', active: false };
+
+/** WeChat quick-reply interception state machine.
+ *  When AI generates a suggested reply while the user is typing:
+ *   - active=true intercepts the NEXT keypress in readLine
+ *   - Y/y → send message via sendWechatMessage, restore prompt
+ *   - Any other key → dismiss, process key normally */
+let _wechat = null;  // module-level for readLine and exit handlers
+let _replyModeActive = false;
+global.pendingReplies = [];  // [{ contact, text, originalMsg }]
+
+function _renderReplyQueue() {
+  process.stdout.write('\r\x1b[2K');
+  console.log(chalk.cyan.bold('\n💡 [ArkTerm 待发队列]:'));
+  global.pendingReplies.forEach((r, i) => {
+    console.log(chalk.cyan(`  [${i + 1}] (${r.contact}): "${r.text}"`));
+  });
+  console.log(chalk.dim('  按对应数字键一键发送  |  按 [Enter] 或其他键清空队列'));
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -323,25 +349,84 @@ async function readLine(promptStr) {
       const left = promptStr + buf.slice(0, pos);
       const right = buf.slice(pos);
       const cursorChar = right.length > 0 ? right[0] : ' ';
-      
+
       readline.cursorTo(stdout, 0);
       readline.clearLine(stdout, 0);
       stdout.write(left + chalk.inverse(cursorChar) + right.slice(1));
-      
+
       // Use visual (column) width for cursor positioning — CJK chars are 2 cols
       const promptCols = visualWidth(promptStr);
       const leftCols = visualWidth(buf.slice(0, pos));
       readline.cursorTo(stdout, promptCols + leftCols);
+
+      // ── Expose state for WeChat interrupt/restore ──────────────────
+      _inputState.buf = buf;
+      _inputState.pos = pos;
+      _inputState.display = display;
+      _inputState.promptStr = promptStr;
+      _inputState.active = true;
     }
 
     display();
 
     function cleanup() {
+      _inputState.active = false;
       if (stdin.isTTY && wasRaw === false) stdin.setRawMode(false);
     }
 
     function onKeypress(ch, key) {
       if (!key) return;
+
+      // ── WeChat reply queue interception ──────────────────────────
+      if (_replyModeActive) {
+        const digit = parseInt(ch, 10);
+        if (!isNaN(digit) && digit >= 1 && digit <= 9 && (digit - 1) < global.pendingReplies.length) {
+          // User pressed a number matching a pending reply
+          const idx = digit - 1;
+          const reply = global.pendingReplies[idx];
+          global.pendingReplies.splice(idx, 1);
+
+          sendWechatMessage(reply.contact, reply.text).then((res) => {
+            stdout.write('\r\x1b[2K');
+            if (res.status === 'ok') {
+              console.log(chalk.green(`  [WeChat] sent to ${reply.contact}${res.method ? ` (${res.method})` : ''}`));
+            } else {
+              console.log(chalk.red(`  [WeChat] send failed for ${reply.contact}: ${res.error || 'unknown error'}`));
+              global.pendingReplies.splice(Math.min(idx, global.pendingReplies.length), 0, reply);
+            }
+
+            _replyModeActive = global.pendingReplies.length > 0;
+            if (_replyModeActive) _renderReplyQueue();
+            if (_inputState.display) _inputState.display();
+          }).catch((err) => {
+            stdout.write('\r\x1b[2K');
+            console.log(chalk.red(`  [WeChat] send failed for ${reply.contact}: ${err.message || err}`));
+            global.pendingReplies.splice(Math.min(idx, global.pendingReplies.length), 0, reply);
+            _replyModeActive = true;
+            _renderReplyQueue();
+            if (_inputState.display) _inputState.display();
+          });
+
+          stdout.write('\r\x1b[2K');
+          console.log(chalk.dim(`  [WeChat] sending to ${reply.contact}...`));
+
+          if (global.pendingReplies.length === 0) {
+            _replyModeActive = false;
+            display();
+          } else {
+            _renderReplyQueue();
+            if (_inputState.display) _inputState.display();
+          }
+          return;
+        }
+
+        // Enter or any other key — clear entire queue
+        _replyModeActive = false;
+        global.pendingReplies.length = 0;
+        stdout.write('\r\x1b[2K');
+        display();
+        return;
+      }
 
       switch (key.name) {
         case 'return':
@@ -413,6 +498,7 @@ async function readLine(promptStr) {
               cleanup();
               stdout.write('\n');
               resolve(null);
+              if (_wechat) _wechat.stop();  // kill PowerShell child before exit
               process.exit(0);
             }
           }
@@ -648,6 +734,64 @@ async function main() {
   const session = new ChatSession();
   session.appendMessage({ role: 'system', content: buildSystemPrompt() });
 
+  // 5. Start WeChat monitor — polls local WeChat window via UI Automation
+  _wechat = null;
+  function _initWeChat() {
+    try {
+      const client = createClient();
+      _wechat = new WeChatMonitor({
+        client,
+        modelId: state.modelId,
+        interval: 15000, // poll every 15 s
+        onNewMessage: (contact, text) => {
+          // ── Real-time interrupt: fires IMMEDIATELY on detection ────
+          const now = new Date();
+          const time = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+          if (!_inputState.active) {
+            console.log(`\n🔔 [WeChat 实时提醒] ${contact}: ${text}  (${time})`);
+            return;
+          }
+
+          const savedDisplay = _inputState.display;
+
+          // Erase the current input line
+          process.stdout.write('\r\x1b[2K');
+          // Print real-time notification
+          console.log(`\n🔔 [WeChat 实时提醒] ${contact}: ${text}  (${time})`);
+
+          // Restore the prompt + partial input
+          if (savedDisplay) {
+            savedDisplay();
+          }
+        },
+        onMessage: (friendName, message, reply) => {
+          // ── Push to numbered reply queue ─────────────────────────
+          if (_inputState.active) {
+            global.pendingReplies.push({ contact: friendName, text: reply, originalMsg: message });
+            _replyModeActive = true;
+            _renderReplyQueue();
+            if (_inputState.display) _inputState.display();
+          } else {
+            console.log(chalk.cyan(`\n🤖 [ArkTerm 建议回复] (${friendName}): "${reply}"`));
+          }
+        },
+        onStatus: (text) => {
+          // Only print status if REPL is idle (not in middle of input)
+          if (!_inputState.active) {
+            console.log(chalk.dim(`  ${text}`));
+          }
+        },
+      });
+      _wechat.start();
+      setWeChatMonitor(_wechat);
+      setSendWechatMessage(sendWechatMessage);
+    } catch (err) {
+      console.error(chalk.red(`🔥 [WeChat] 初始化失败: ${err.message}`));
+      console.error(chalk.red(`   ${err.stack || '(无调用栈)'}`));
+    }
+  }
+  _initWeChat();
+
   while (true) {
     const currentModelKey = state.currentModelKey;
     const modelDisplay = getCurrentDisplayName();
@@ -671,6 +815,7 @@ async function main() {
         const display = switchModel(nextKey);
         if (display) {
           console.log(chalk.green(`  Switched to ${display}`));
+          if (_wechat) { _wechat.setModelId(state.modelId); _wechat.setClient(createClient()); }
           switched = true;
           break;
         }
@@ -741,6 +886,7 @@ ${modelList}
         if (display) {
           console.log(chalk.green(`  Switched to ${display}`));
           console.log(chalk.dim(`  Endpoint: ${state.baseUrl}`));
+          if (_wechat) { _wechat.setModelId(state.modelId); _wechat.setClient(createClient()); }
         } else {
           console.log(chalk.yellow(`  Unknown model: ${target}. Try: doubao, deepseek, claude`));
         }
@@ -776,6 +922,9 @@ ${modelList}
     // Agent mode: always include tools, let the model decide
     await processAssistantResponse(createClient(), session);
   }
+
+  // ── Graceful WeChat cleanup ───────────────────────────────────────────
+  if (_wechat) _wechat.stop();
 
   // Restore stdin
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
