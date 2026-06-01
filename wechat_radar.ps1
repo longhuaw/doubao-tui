@@ -231,7 +231,7 @@ while ($true) {
         try { $windowRect = $window.Current.BoundingRectangle } catch { }
 
         $wasMinimized = $false
-        $backgroundOnly = ($env:ARKTERM_WECHAT_BACKGROUND_ONLY -eq '1')
+        $backgroundOnly = ($env:ARKTERM_WECHAT_BACKGROUND_ONLY -ne '0')
         try {
             $wp = $window.GetCurrentPattern([Windows.Automation.WindowPattern]::Pattern)
             if ($wp -and $wp.Current.WindowVisualState -eq 'Minimized') {

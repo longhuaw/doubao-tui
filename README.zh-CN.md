@@ -26,7 +26,7 @@ ArkTerm 是一个纯 Node.js 构建的终端 AI Agent，通过 OpenAI 兼容 SDK
   - 持久 PowerShell 子进程轮询微信 UIA 树，实时检测新消息
   - AI 自动生成回复（学习用户聊天风格 + 对话上下文）
   - 数字键一键发送，Enter 清空队列
-  - 纯后台模式（`ARKTERM_WECHAT_BACKGROUND_ONLY=1`），接收消息时不弹窗不抢焦点
+  - 纯后台模式（默认开启），接收消息时不弹窗不抢焦点
   - 物理鼠标点击模拟，可靠完成联系人切换
 - **会话压缩**：消息超过 15 条时自动滑动窗口压缩，保留操作摘要 + 最后 6 条推理窗口。
 - **安全机制**：命令黑名单（高风险立即拒绝，中风险阻断），路径操作限定在工作区/Home/Desktop/Documents/Downloads。
@@ -68,7 +68,7 @@ DEEPSEEK_API_KEY=your_api_key
 DEEPSEEK_MODEL=deepseek-chat
 
 # 微信功能（可选）
-ARKTERM_WECHAT_BACKGROUND_ONLY=1  # 纯后台模式：接收消息时不弹出微信
+ARKTERM_WECHAT_BACKGROUND_ONLY=0  # 设为 0 时接收消息可弹出微信（默认: 1，即后台模式）
 ```
 
 所有模型通过 OpenAI 兼容 SDK 统一调用。
@@ -113,7 +113,7 @@ ARKTERM_WECHAT_BACKGROUND_ONLY=1  # 纯后台模式：接收消息时不弹出�
 
 **联系人切换**：AI 可通过 `switch_and_receive_wechat` 工具自动切换到指定联系人窗口，获取对话历史用于上下文感知回复。
 
-**纯后台模式**：设置 `ARKTERM_WECHAT_BACKGROUND_ONLY=1` 后，接收消息不会弹出微信窗口、不抢焦点。仅在用户主动发送消息时短暂激活微信完成操作后恢复。
+**纯后台模式**：默认开启 — 接收消息不会弹出微信窗口、不抢焦点。仅在用户主动发送消息时短暂激活微信完成操作后恢复。设置 `ARKTERM_WECHAT_BACKGROUND_ONLY=0` 可关闭。
 
 ### AI Agent 工具
 

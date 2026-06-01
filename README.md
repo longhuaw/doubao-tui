@@ -26,7 +26,7 @@ ArkTerm is a pure Node.js terminal AI agent that connects to multiple LLMs via t
   - Persistent PowerShell child process polls the WeChat UIA tree for real-time message detection
   - AI auto-generates replies (learns user chat style + conversation context)
   - Press a number key to send, Enter to dismiss the queue
-  - Pure background mode (`ARKTERM_WECHAT_BACKGROUND_ONLY=1`): never pops up or steals focus on incoming messages
+  - Pure background mode (default): never pops up or steals focus on incoming messages
   - Physical mouse-click simulation for reliable contact switching
 - **Session Compaction**: Sliding-window compaction when messages exceed 15 — keeps operation summary + last 6 messages as reasoning window.
 - **Security**: Command blacklist (high-risk → immediate refusal, moderate → blocked), path operations restricted to workspace/home/Desktop/Documents/Downloads.
@@ -68,7 +68,7 @@ DEEPSEEK_API_KEY=your_api_key
 DEEPSEEK_MODEL=deepseek-chat
 
 # WeChat features (optional)
-ARKTERM_WECHAT_BACKGROUND_ONLY=1  # Pure background: never pop up WeChat on incoming messages
+ARKTERM_WECHAT_BACKGROUND_ONLY=0  # Set to 0 to allow WeChat to pop up on incoming messages (default: 1 / background mode)
 ```
 
 All models use the OpenAI-compatible SDK uniformly.
@@ -113,7 +113,7 @@ WeChat integration uses Windows UIAutomation (UIA) to monitor and operate WeChat
 
 **Contact Switching**: The AI can use `switch_and_receive_wechat` to switch to a specific contact and fetch conversation history for context-aware replies.
 
-**Pure Background Mode**: Set `ARKTERM_WECHAT_BACKGROUND_ONLY=1` — receiving messages never pops up the WeChat window or steals focus. Only user-initiated sends briefly activate WeChat, then restore the previous foreground window.
+**Pure Background Mode**: Enabled by default — receiving messages never pops up the WeChat window or steals focus. Only user-initiated sends briefly activate WeChat, then restore the previous foreground window. Set `ARKTERM_WECHAT_BACKGROUND_ONLY=0` to disable.
 
 ### AI Agent Tools
 

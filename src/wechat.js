@@ -157,7 +157,7 @@ if (-not $window) { Write-Output '{"status":"window_not_found"}'; exit 0 }
 
 # ── Force-restore from minimized (UIA tree needs Normal state) ──────
 # BACKGROUND_ONLY gate: restoring window steals focus
-$backgroundOnly = ($env:ARKTERM_WECHAT_BACKGROUND_ONLY -eq '1')
+$backgroundOnly = ($env:ARKTERM_WECHAT_BACKGROUND_ONLY -ne '0')
 if (-not $backgroundOnly) {
   try {
     $wp = $window.GetCurrentPattern([Windows.Automation.WindowPattern]::Pattern)
@@ -480,7 +480,7 @@ try {
 
 if (-not $alreadySelected) {
   # Contact is NOT the active one — need to switch
-  $bkgOnly = ($env:ARKTERM_WECHAT_BACKGROUND_ONLY -eq '1')
+  $bkgOnly = ($env:ARKTERM_WECHAT_BACKGROUND_ONLY -ne '0')
 
   if ($bkgOnly) {
     # ═══ BACKGROUND-ONLY: foreground activation + FULL fresh UIA scan ════
@@ -690,10 +690,9 @@ if (-not $editBox) {
 
 # ═══ 7. Inject text + background-send ══════════════════════════════════════
 try {
-  # ── Background-only gate: when ARKTERM_WECHAT_BACKGROUND_ONLY=1, NEVER
-  # call SetForegroundWindow or SendKeys. All foreground fallbacks are
-  # skipped — we rely solely on UIA ValuePattern + PostMessage + UIA Button.
-  $allowForegroundFallback = ($env:ARKTERM_WECHAT_BACKGROUND_ONLY -ne '1')
+  # ── Background-only is DEFAULT: no SetForegroundWindow/SendKeys fallback.
+  # Only allow foreground when user explicitly set ARKTERM_WECHAT_BACKGROUND_ONLY=0.
+  $allowForegroundFallback = ($env:ARKTERM_WECHAT_BACKGROUND_ONLY -eq '0')
 
   # Pre-send: give the Edit box UIA focus. This primes the element and may
   # help the UIA provider expose the Send button / process PostMessage.
@@ -1349,12 +1348,11 @@ class WeChatMonitor {
     try { this._onNewMessage(contact, text); } catch { }
 
     // Generate AI reply for this contact.
-    // When ARKTERM_WECHAT_BACKGROUND_ONLY=1, skip fetchLocalWechatHistory to
+    // Background-only is the default: skip fetchLocalWechatHistory to
     // avoid the pop-up from buildUiaScript's SetWindowVisualState/SetFocus.
-    // Reply quality degrades slightly (no conversation context) but the
-    // WeChat window stays completely silent.
+    // Set ARKTERM_WECHAT_BACKGROUND_ONLY=0 to re-enable foreground fallback.
     const self = this;
-    const backgroundOnly = process.env.ARKTERM_WECHAT_BACKGROUND_ONLY === '1';
+    const backgroundOnly = process.env.ARKTERM_WECHAT_BACKGROUND_ONLY !== '0';
     (async () => {
       try {
         let conversation = [];
